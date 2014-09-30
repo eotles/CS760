@@ -19,8 +19,9 @@ split = collections.namedtuple('split', ['attributeIndex', 'midpoint'])
 voteResults = collections.namedtuple('voteResults', ['tally', 'winner'])
 LOG2 = math.log(2)
 
-ATTRIBUTES = None
+attributes = None
 
+#obejct for decision tree nodes
 class dtNode(object):
     def __init__(self):
         self.nodeInfo = None
@@ -39,9 +40,6 @@ class dtNode(object):
         self.split = split
     
     def addChild(self, attVal, childNode):
-        #print "add child:",
-        #print attVal,
-        #print childNode
         self.children.update({attVal : childNode})
     
     def toDisp(self, attributes, path, level):
@@ -49,7 +47,7 @@ class dtNode(object):
         for _ in xrange(level):
             outString += "|\t"
         outString += path
-        outString += " " + str(self.nodeInfo)
+        outString += " " + str(self.nodeInfo).replace(",", "")
         if(self.isLeaf):
             outString += ": " + str(self.predClass)
             print(outString)
@@ -70,6 +68,8 @@ class dtNode(object):
                     child = self.children.get(val)
                     child.toDisp(attributes, path, level+1)
 
+#used to get only a certain percent of the data
+#mostly used for making learning curve graphs
 def percentData(percent, data):
     numNeeded = min(percent,1)*len(data)
     availIndices = range(len(data))
@@ -81,7 +81,7 @@ def percentData(percent, data):
     return(pickedData)
     
 
-
+#Call this to evaulate test set accuracy
 def test(testFilePath, dtRootNode):
     testARFF = load(testFilePath)
     numCor = 0
@@ -99,7 +99,8 @@ def test(testFilePath, dtRootNode):
     print("Accuracy: " + str(accuracy))
     return(accuracy)
             
-    
+
+#Returns predicted class for an istance by traversing the graph    
 def evaluate(dtRootNode, attributes, instance):
     currDTNode = dtRootNode
     if(currDTNode.isLeaf):
@@ -114,26 +115,29 @@ def evaluate(dtRootNode, attributes, instance):
             currDTNode = currDTNode.children.get(attVal <= attSplit.midpoint)
         return(evaluate(currDTNode, attributes, instance))
 
+#take ARFF object in and learn Decision Tree
 def learn(learnARFF, m):
-    ATTRIBUTES = learnARFF.attributes
+    attributes = learnARFF.attributes
     transData = transpose(learnARFF.attributes, learnARFF.data)
     root = buildTree(transData, learnARFF.attributes, m)
-    rootSplitAtt = ATTRIBUTES[root.split.attributeIndex]
+    rootSplitAtt = attributes[root.split.attributeIndex]
     if(rootSplitAtt.isNominal):
         for val in rootSplitAtt.nominalValues:
             path = rootSplitAtt.name + " = " + val
             child = root.children.get(val)
-            child.toDisp(ATTRIBUTES, path, 0)
+            child.toDisp(attributes, path, 0)
     else:
         mid = root.split.midpoint
         for val in [True, False]:
             sign = " <= " if val else " < " 
             path = rootSplitAtt.name + sign + str(mid)
             child = root.children.get(val)
-            child.toDisp(ATTRIBUTES, path, 0)
+            child.toDisp(attributes, path, 0)
     return(root)
 
+#Heavy lifting of actual building of tree
 def buildTree(transData, attributes, m):
+    #small method used to make vote tallies
     def makePred(classCol, attributes):
         predCount = dict()
         for cla in attributes[-1].nominalValues:
@@ -152,14 +156,12 @@ def buildTree(transData, attributes, m):
         results= voteResults(tally, pred)
         return(results)
             
-    #print("new node")
     currNode = dtNode()
     pred = makePred(transData[-1], attributes)
     currNode.tally = pred.tally
     currNode.nodeInfo = pred.tally
     
     #stopping criteria
-    #print(transData[-1])
     if(len(set(transData[-1])) == 1):
         pred = makePred(transData[-1], attributes)
         currNode.tally = pred.tally
@@ -176,30 +178,24 @@ def buildTree(transData, attributes, m):
         currNode.makeLeaf(pred.winner)
         return(currNode)
     else:
+        #don't stop - find best split and split
         bestSplit = findBestSplit(transData, attributes)
         currNode.makeInterior(bestSplit)
-        #print "\tBestSplit@",
-        #print attributes[bestSplit.attributeIndex],
-        #print bestSplit.attributeIndex,
-        #print("| midpoint:" + str(bestSplit.midpoint))
         selectedAttributeIndex = bestSplit.attributeIndex
         splitAttributes = copy.copy(attributes)
         if(splitAttributes[bestSplit.attributeIndex].isNominal):
             splitData = splitDataNomninally(transData, splitAttributes, selectedAttributeIndex)
-            #splitAttributes.pop(selectedAttributeIndex)
         else:
             midpoint = bestSplit.midpoint
             splitData = splitDataByPoint(transData, splitAttributes, selectedAttributeIndex, midpoint)
         
         for val,subNodeData in splitData.iteritems():
-            #print "\n",
-            #print(val)
             currNode.addChild(val, buildTree(subNodeData, splitAttributes, m)) 
         return(currNode)
     
+#method used to split data based on nominal feature
 def splitDataNomninally(data, attributes, selectedAttributeIndex):
     splitData = dict()
-    #carvedData = data[:selectedAttributeIndex] + data[selectedAttributeIndex+1:]
     carvedData = data
     for nominalVal in attributes[selectedAttributeIndex].nominalValues:
         splitData.update({nominalVal : [ [] for _ in carvedData ]})
@@ -210,6 +206,7 @@ def splitDataNomninally(data, attributes, selectedAttributeIndex):
             splitData.update({instanceVal : storedData})  
     return(splitData)      
 
+#method used to split data based on a RV feature and midpoint
 def splitDataByPoint(data, attributes, selectedAttributeIndex, midpoint):
     splitData = dict()
     for ltMidpoint in [True, False]:
@@ -225,7 +222,7 @@ def splitDataByPoint(data, attributes, selectedAttributeIndex, midpoint):
             splitData.update({ltMidpointVal : storedData})
     return(splitData)
 
-   
+#Actually go through data and attributes to find best split   
 def findBestSplit(transData, attributes):
     minCondEntropyVal = sys.float_info.max
     minCondEntropyAtt = None    
@@ -236,9 +233,6 @@ def findBestSplit(transData, attributes):
             nns = findNonNomialSplit(attCol, transData[-1])
             condEntropy = nns.conditionalEntropy
             midpoint = nns.midpoint
-        #print(attributes[index].name),
-        #print ": ",
-        #print condEntropy
         if(condEntropy < minCondEntropyVal):
             minCondEntropyAttIndex = index
             minCondEntropyVal = condEntropy
@@ -249,12 +243,12 @@ def findBestSplit(transData, attributes):
                 minCondEntropyAttMidpoint = midpoint
     return(split(minCondEntropyAttIndex, minCondEntropyAttMidpoint))
 
-
+#find the best non-nominal (RV) split location (midpoint)
 def findNonNomialSplit(attCol, classCol):
     def potentialSplitConditionalEntropy(attCol, classCol, midpoint):
         bAttCol = [(val <= midpoint) for val in attCol]
         return(computeCondEntropy(bAttCol, classCol))
-    
+    #put things on a numberline
     numberLine = dict()
     for index,attVal in enumerate(attCol):
         labels = set()
@@ -262,7 +256,7 @@ def findNonNomialSplit(attCol, classCol):
             labels = numberLine.get(attVal)
         labels.add(classCol[index])
         numberLine.update({attVal: labels})
-        
+    #sort the numberline and find midpoints on the numberline that maximize info gain    
     numberLineVals = sorted(numberLine)
     bestCondEntropy = sys.float_info.max
     bestSplit = None
@@ -286,7 +280,8 @@ def findNonNomialSplit(attCol, classCol):
             lastValLabel = valLabel
     return(bestSplit)
        
-
+#function to compute conditional entropy based on a class col and an attribute
+#col
 def computeCondEntropy(attCol, classCol):
     aDict = dict()
     nested = dict()
@@ -314,14 +309,15 @@ def computeCondEntropy(attCol, classCol):
         condEntropy += p_x*y_entropy
     return(condEntropy)
             
-    
+#simple function to turn the data into columnar form    
 def transpose(attributes, data):
     transData = [list() for _ in attributes ]
     for row in data:
         for col, value in enumerate(row):
             transData[col].append(value)
     return(transData)
-    
+
+#load file into custom ARFF framework    
 def load(filePath):    
     trainDataFile = open(filePath)
     headerMode = True
@@ -362,6 +358,7 @@ def main(trainFilePath, testFilePath, m):
     test(testFilePath, dtRootNode)
     
     '''
+    #code used for problems 2 and 3
     learnData = copy.copy(learnARFF.data)
     accuracies = list()
     accDict = dict()
